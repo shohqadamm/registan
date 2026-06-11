@@ -163,7 +163,8 @@
    ============================================================ */
 const CLIENT_ID = '979016762856-ajsbdlofld9lfpaojs60qrmdqdfrldrs.apps.googleusercontent.com';
 const SHEET_ID  = '1hXLps9I00RfxNwrEX2wrhO2becSiO4aCWx404gZVKKY';
-const SHEET_GID = '737138783';
+const SHEET_GID = '';
+const SHEET_NAME = 'Maktab';
 /* ============================================================ */
 
 const SCOPE = 'openid email https://www.googleapis.com/auth/spreadsheets.readonly';
@@ -243,7 +244,10 @@ async function loadData(){
     if(metaRes.status === 401){ return reauth(); }
     if(!metaRes.ok){ const body = await metaRes.text(); throw new Error('META ' + metaRes.status + ' :: ' + body); }
     const meta = await metaRes.json();
-    const sheet = meta.sheets.find(s => String(s.properties.sheetId) === String(SHEET_GID)) || meta.sheets[0];
+    const sheet =
+  meta.sheets.find(s => String(s.properties.sheetId) === String(SHEET_GID) && SHEET_GID) ||
+  meta.sheets.find(s => s.properties.title === SHEET_NAME) ||
+  meta.sheets[0];
     const title = sheet.properties.title;
 
     // 2) qiymatlarni olish
