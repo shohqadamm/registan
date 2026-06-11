@@ -301,17 +301,41 @@ function showError(msg, steps){
   $('errSteps').innerHTML = (steps||[]).map(s=>`<li>${esc(s)}</li>`).join('');
 }
 
+/* ---- Excel sana kodini o'qish (45066 → "15.05.2023") ---- */
+function excelDateToStr(n){
+  const d = new Date(Math.round((n - 25569) * 86400000));
+  if(isNaN(d.getTime())) return String(n);
+  return d.toLocaleDateString('uz-UZ',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+function isDateCol(label){ return /sana|date|vaqt|time/i.test(label); }
+function isNumericCol(label, vals){
+  if(isDateCol(label)) return false;
+  if(/^№|tartib/i.test(label)) return false;
+  return vals.length>0 && vals.every(v=>{
+    const s=String(v).trim(); return s===''||(!isNaN(parseFloat(s.replace(/[\s,]/g,'')))&&/^[\d\s.,eE+\-]+$/.test(s));
+  });
+}
+function fmtSum(n){ if(n>=1e9)return(n/1e9).toFixed(1).replace(/\.0$/,'')+'mlrd'; if(n>=1e6)return(n/1e6).toFixed(1).replace(/\.0$/,'')+'mln'; return fmt(n); }
+
 function parseValues(values){
   const header = values[0].map((h,i)=>(String(h||'').trim())||('Ustun '+(i+1)));
-  let dataRows = values.slice(1).filter(r => r && r.some(v => String(v).trim()!==''));
+  let dataRows = values.slice(1).filter(r => r && r.some(v => String(v||'').trim()!=='' && String(v||'').trim()!=='#N/A'));
   const width = header.length;
   dataRows = dataRows.map(r => { const c=[...r]; while(c.length<width)c.push(''); return c.slice(0,width); });
   columns = header.map((label,i)=>{
-    const vals = dataRows.map(r=>r[i]).filter(v=>String(v).trim()!=='');
-    const numeric = vals.length>0 && vals.every(v=>!isNaN(parseFloat(String(v).replace(/[\s,]/g,''))) && /^[\d\s.,-]+$/.test(String(v)));
-    return {label, type: numeric?'number':'string'};
+    const vals = dataRows.map(r=>r[i]).filter(v=>{ const s=String(v||'').trim(); return s!==''&&s!=='#N/A'; });
+    const isDate = isDateCol(label);
+    const isNum = !isDate && isNumericCol(label, vals);
+    return {label, type: isDate?'date':isNum?'number':'string'};
   });
-  rows = dataRows.map(r => r.map((v,i)=> columns[i].type==='number' && String(v).trim()!=='' ? toNum(v) : v));
+  rows = dataRows.map(r => r.map((v,i)=>{
+    const raw=String(v||'').trim();
+    if(raw===''||raw==='#N/A') return '';
+    const col=columns[i];
+    if(col.type==='date'){ const n=parseFloat(raw); return (!isNaN(n)&&n>40000&&n<60000)?excelDateToStr(n):raw; }
+    if(col.type==='number') return toNum(v);
+    return raw;
+  }));
 }
 
 /* ---------- Filtrlash / saralash ---------- */
@@ -358,8 +382,8 @@ function renderFacts(data){
   facts.push({lbl:'Jami shartnomalar',val:fmt(rows.length),live:true});
   const isF = searchQ.trim()||Object.keys(filters).length;
   facts.push({lbl:isF?'Filtr natijasi':'Ko\u02bcrsatilmoqda',val:fmt(data.length),accent:true,sub:isF?`jami ${fmt(rows.length)} tadan`:'barcha yozuvlar'});
-  const sumCol=findCol(['summa','summ','to\u02bclov','narx','amount']);
-  if(sumCol>=0){const total=data.reduce((s,r)=>s+toNum(r[sumCol]),0);if(total>0)facts.push({lbl:'Jami summa',val:fmt(total),sub:data.length?`o'rtacha ${fmt(total/data.length)}`:''});}
+  const sumCol=findCol(['shartnoma sum','summa','summ']);
+  if(sumCol>=0){const total=data.reduce((s,r)=>s+toNum(r[sumCol]),0);if(total>0)facts.push({lbl:'Jami shartnoma summasi',val:fmtSum(total),sub:data.length?`o'rtacha ${fmtSum(total/data.length)}`:''});}
   const statCol=findCol(['holat','status']);
   if(statCol>=0&&facts.length<5){const c={};data.forEach(r=>{const v=String(r[statCol]).trim();if(v)c[v]=(c[v]||0)+1;});const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];if(top)facts.push({lbl:'Eng ko\u02bcp holat',val:fmt(top[1]),sub:top[0]});}
   columns.forEach((c,i)=>{if(c.type!=='number'||i===sumCol||facts.length>=5)return;const s=data.reduce((a,r)=>a+toNum(r[i]),0);if(s===0)return;facts.push({lbl:c.label+' (jami)',val:fmt(s)});});
@@ -386,7 +410,12 @@ function priority(i){const l=columns[i].label.toLowerCase();if(/holat|status/.te
 function renderTable(data){
   $('thead').innerHTML='<tr><th>#</th>'+columns.map((c,i)=>`<th onclick="setSort(${i})">${esc(c.label)}${sortCol===i?`<span class="arrow">${sortDir>0?'▲':'▼'}</span>`:''}</th>`).join('')+'</tr>';
   const LIMIT=1000;
-  $('tbody').innerHTML=data.slice(0,LIMIT).map((r,idx)=>`<tr><td class="rownum">${idx+1}</td>`+r.map((v,i)=>`<td class="${columns[i].type==='number'?'num':''}" title="${esc(String(v))}">${columns[i].type==='number'&&v!==''?fmt(toNum(v)):esc(String(v))}</td>`).join('')+'</tr>').join('');
+  $('tbody').innerHTML=data.slice(0,LIMIT).map((r,idx)=>`<tr><td class="rownum">${idx+1}</td>`+r.map((v,i)=>{
+    const col=columns[i]; const s=String(v);
+    const cls=col.type==='number'?'num':'';
+    const disp=col.type==='number'&&v!==''?fmtSum(toNum(v)):esc(s);
+    return `<td class="${cls}" title="${esc(s)}">${disp}</td>`;
+  }).join('')+'</tr>').join('');
   $('tableCount').textContent=data.length>LIMIT?`${fmt(data.length)} tadan dastlabki ${LIMIT} tasi`:`${fmt(data.length)} ta yozuv`;
 }
 
