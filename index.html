@@ -396,10 +396,16 @@ function renderFacts(data){
   const facts=[];
 
   // 1) Jami — faqat jinsi yozilgan qatorlarni sanash
-  const jinsCol=findCol(['jinsi','jins','gender']);
-  const jinsliData = jinsCol>=0 ? data.filter(r=>String(r[jinsCol]).trim()!=='') : data;
-  facts.push({lbl:'Jami shartnomalar',val:fmt(jinsliData.length),live:true,
-    sub: jinsCol>=0 && jinsliData.length!==data.length ? `(${data.length} tadan jinsi yozilgan)` : ''});
+const jinsCol=findCol(['jinsi','jins','gender']);
+const holatCol=findCol(['holati','holat','status']);
+const jinsliData = data.filter(r=>{
+  const jinsi = jinsCol>=0 ? String(r[jinsCol]).trim() : 'bor';
+  const holat = holatCol>=0 ? String(r[holatCol]).trim().toLowerCase() : '';
+  const bekor = /bekor/i.test(holat);
+  return jinsi!=='' && !bekor;
+});
+facts.push({lbl:'Jami shartnomalar',val:fmt(jinsliData.length),live:true,
+  sub:`bekor qilganlar ayirilgan`});
 
   // 2) Filtr natijasi yoki ko'rsatilmoqda
   const isF=searchQ.trim()||Object.keys(filters).length;
