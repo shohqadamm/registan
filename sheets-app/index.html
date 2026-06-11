@@ -161,12 +161,12 @@
 /* ============================================================
    SOZLAMALAR
    ============================================================ */
-const CLIENT_ID = 'BU_YERGA_CLIENT_ID_QOYING.apps.googleusercontent.com';
+const CLIENT_ID = '979016762856-ajsbdlofld9lfpaojs60qrmdqdfrldrs.apps.googleusercontent.com';
 const SHEET_ID  = '1hXLps9I00RfxNwrEX2wrhO2becSiO4aCWx404gZVKKY';
 const SHEET_GID = '737138783';
 /* ============================================================ */
 
-const SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+const SCOPE = 'openid email https://www.googleapis.com/auth/spreadsheets.readonly';
 const MAX_FILTER_OPTIONS = 30;
 const MAX_BREAKDOWNS = 3;
 
@@ -190,20 +190,28 @@ window.onload = () => {
       tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID, scope: SCOPE,
         callback: (resp) => {
-          if(resp.error){ showError('Kirishda xatolik: ' + resp.error, []); return; }
+          if(resp.error){ showError('Kirishda xatolik: ' + resp.error, ["Qaytadan kirib ko'ring"]); return; }
+          if(!resp.access_token || typeof resp.access_token !== 'string'){
+            showError('Token olinmadi. Qaytadan kiring.', []); return;
+          }
           accessToken = resp.access_token;
           sessionStorage.setItem('gtok', accessToken);
           afterLogin();
         }
       });
       const saved = sessionStorage.getItem('gtok');
-      if(saved){ accessToken = saved; afterLogin(); }
-      else { hideAllStates(); show('signinBox'); }
+      // Faqat haqiqiy ko'rinishdagi tokenni ishlatamiz ("undefined"/"null"/bo'sh emas)
+      if(saved && saved.length > 20 && saved !== 'undefined' && saved !== 'null'){
+        accessToken = saved; afterLogin();
+      }else{
+        sessionStorage.removeItem('gtok');
+        hideAllStates(); show('signinBox');
+      }
     }
   }, 150);
 };
 
-$('btnSignin').onclick = () => tokenClient.requestAccessToken({prompt:''});
+$('btnSignin').onclick = () => tokenClient.requestAccessToken({prompt:'select_account'});
 $('btnSignout').onclick = () => {
   sessionStorage.removeItem('gtok');
   if(accessToken && google.accounts.oauth2) google.accounts.oauth2.revoke(accessToken, ()=>{});
@@ -212,10 +220,15 @@ $('btnSignout').onclick = () => {
   hideAllStates(); show('signinBox');
 };
 
-function afterLogin(){
+async function afterLogin(){
   show('who'); show('btnCsv'); show('btnRefresh'); show('btnSignout');
   hide('signinBox');
-  $('who').innerHTML = '🟢 <b>Kirgan holatdasiz</b>';
+  $('who').innerHTML = '🟢 <b>Kirilmoqda…</b>';
+  try{
+    const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {headers:{Authorization:'Bearer '+accessToken}});
+    if(r.ok){ const u = await r.json(); window.currentEmail = u.email || ''; $('who').innerHTML = '🟢 Kirgan: <b>'+esc(window.currentEmail)+'</b>'; }
+    else { $('who').innerHTML = '🟢 <b>Kirgan holatdasiz</b>'; }
+  }catch(e){ $('who').innerHTML = '🟢 <b>Kirgan holatdasiz</b>'; }
   loadData();
 }
 
@@ -228,7 +241,7 @@ async function loadData(){
     // 1) gid -> varaq nomini topish
     const metaRes = await api(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=sheets.properties`);
     if(metaRes.status === 401){ return reauth(); }
-    if(!metaRes.ok) throw new Error('META ' + metaRes.status);
+    if(!metaRes.ok){ const body = await metaRes.text(); throw new Error('META ' + metaRes.status + ' :: ' + body); }
     const meta = await metaRes.json();
     const sheet = meta.sheets.find(s => String(s.properties.sheetId) === String(SHEET_GID)) || meta.sheets[0];
     const title = sheet.properties.title;
@@ -236,7 +249,7 @@ async function loadData(){
     // 2) qiymatlarni olish
     const valRes = await api(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(title)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
     if(valRes.status === 401){ return reauth(); }
-    if(!valRes.ok) throw new Error('VALUES ' + valRes.status);
+    if(!valRes.ok){ const body = await valRes.text(); throw new Error('VALUES ' + valRes.status + ' :: ' + body); }
     const vd = await valRes.json();
     const values = vd.values || [];
     if(values.length < 1) throw new Error('EMPTY');
@@ -245,21 +258,42 @@ async function loadData(){
     buildUI();
   }catch(e){
     console.error(e);
-    if(String(e.message).includes('META 403') || String(e.message).includes('VALUES 403')){
-      showError("Bu Google hisobida jadvalni ochish huquqi yo'q.", [
-        "Jadval egasidan bu hisobingizga (kirgan email) ruxsat berishini so'rang",
-        "Yoki jadval egasi sifatida o'zingiz kiring",
-        "Sheets'da Share orqali kerakli emailga Viewer ruxsatini bering"
+    const raw = String(e.message);
+    const who = window.currentEmail ? `Kirgan hisob: ${window.currentEmail}. ` : '';
+    if(raw.includes('NO_TOKEN') || raw.includes('unregistered callers') || raw.includes('without established identity')){
+      showError("Token ulanmadi — qayta kirish kerak.", [
+        "Yuqoridagi 'Chiqish' tugmasini bosing",
+        "Sahifani to'liq yangilang (Ctrl+Shift+R)",
+        "Qaytadan 'Google bilan kirish' → iwyoqar@gmail.com ni tanlang"
       ]);
-    }else if(String(e.message)==='EMPTY'){
-      showError("Varaqda ma'lumot topilmadi.", ["gid raqami to'g'riligini tekshiring","Varaqda hech bo'lmaganda sarlavha qatori borligiga ishonch hosil qiling"]);
+    }else if(raw.includes('has not been used') || raw.includes('is disabled') || raw.includes('SERVICE_DISABLED') || raw.includes('accessNotConfigured')){
+      // Google Sheets API loyihada yoqilmagan
+      showError("Google Sheets API loyihada yoqilmagan.", [
+        "console.cloud.google.com ga kiring va Client ID yaratgan loyihangizni tanlang",
+        "APIs & Services → Library → 'Google Sheets API' ni qidiring → ENABLE bosing",
+        "1-2 daqiqa kuting, keyin Qayta urinish bosing",
+        "Diqqat: API aynan Client ID joylashgan loyihada yoqilishi shart"
+      ]);
+    }else if(raw.includes('META 403') || raw.includes('VALUES 403') || raw.includes('PERMISSION_DENIED')){
+      showError(who + "Bu hisobda jadvalni ochish huquqi yo'q.", [
+        "Jadvalni oching → Share → bu emailga Viewer ruxsatini bering",
+        "Yoki jadval egasi hisobi bilan kiring (Chiqish → qayta kirish)",
+        "Email to'g'ri ekaniga ishonch hosil qiling (yuqorida ko'rsatilgan)"
+      ]);
+    }else if(raw.includes('META 404') || raw.includes('VALUES 404') || raw.includes('NOT_FOUND')){
+      showError("Jadval yoki varaq topilmadi.", ["SHEET_ID to'g'riligini tekshiring","gid raqamini tekshiring"]);
+    }else if(raw.includes('EMPTY')){
+      showError("Varaqda ma'lumot topilmadi.", ["gid raqami to'g'riligini tekshiring","Varaqda kamida sarlavha qatori borligiga ishonch hosil qiling"]);
     }else{
-      showError("Ulanishda xatolik: " + e.message, ["Internetni tekshiring","Qayta urinib ko'ring"]);
+      showError("Xatolik: " + raw.slice(0,400), ["Internetni tekshiring","F12 → Console'dagi to'liq xatoni nusxalab yuboring"]);
     }
   }
 }
 
-function api(url){ return fetch(url, {headers:{Authorization:'Bearer '+accessToken}}); }
+function api(url){
+  if(!accessToken || accessToken.length < 20){ reauth(); return Promise.reject(new Error('NO_TOKEN')); }
+  return fetch(url, {headers:{Authorization:'Bearer '+accessToken}});
+}
 function reauth(){ sessionStorage.removeItem('gtok'); accessToken=null; tokenClient.requestAccessToken({prompt:'consent'}); }
 function showError(msg, steps){
   hideAllStates(); show('errorBox');
@@ -376,4 +410,10 @@ $('btnCsv').onclick=()=>{
 };
 </script>
 </body>
+</html>
+
+
+
+
+
 </html>
