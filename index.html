@@ -68,7 +68,38 @@
   .table-scroll{overflow-x:auto;max-height:62vh}
   table{width:100%;border-collapse:collapse;font-size:13.5px}
   thead th{position:sticky;top:0;background:var(--ink);color:#fff;text-align:left;font:600 12px 'Inter',sans-serif;letter-spacing:.05em;padding:11px 14px;white-space:nowrap;cursor:pointer;user-select:none}
-  thead th .arrow{opacity:.6;font-size:10px;margin-left:5px}
+  thead th .th-inner{display:flex;align-items:center;gap:6px}
+  thead th .arrow{opacity:.6;font-size:10px}
+  thead th .ficon{font-size:11px;opacity:.5;margin-left:auto;flex-shrink:0}
+  thead th.filtered .ficon{opacity:1;color:#6EFFD0}
+  thead th:hover .ficon{opacity:.9}
+
+  /* ===== Filter popup ===== */
+  .fpop{
+    position:fixed;z-index:9999;background:var(--card);
+    border:1.5px solid var(--line);border-radius:var(--radius);
+    box-shadow:0 8px 32px rgba(0,0,0,.18);
+    min-width:220px;max-width:300px;
+    display:flex;flex-direction:column;max-height:380px;
+  }
+  .fpop-head{padding:12px 14px 8px;border-bottom:1px solid var(--line)}
+  .fpop-search{
+    display:flex;align-items:center;gap:8px;background:var(--paper);
+    border:1.5px solid var(--line);border-radius:8px;padding:7px 10px;
+  }
+  .fpop-search:focus-within{border-color:var(--teal)}
+  .fpop-search input{border:0;background:transparent;outline:none;flex:1;font:500 13px 'Inter',sans-serif;color:var(--ink);width:100%}
+  .fpop-actions{display:flex;gap:6px;margin-top:8px}
+  .fpop-actions button{flex:1;font:600 12px 'Inter',sans-serif;padding:6px 0;border-radius:7px;cursor:pointer;border:1.5px solid var(--line);background:var(--paper);color:var(--ink)}
+  .fpop-actions button:hover{background:var(--teal-soft);border-color:var(--teal)}
+  .fpop-actions button.apply{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .fpop-actions button.apply:hover{background:var(--teal)}
+  .fpop-list{overflow-y:auto;flex:1;padding:6px 0}
+  .fpop-item{display:flex;align-items:center;gap:10px;padding:7px 14px;cursor:pointer;font-size:13.5px}
+  .fpop-item:hover{background:var(--teal-soft)}
+  .fpop-item input[type=checkbox]{width:15px;height:15px;accent-color:var(--teal);cursor:pointer;flex-shrink:0}
+  .fpop-item .cnt{margin-left:auto;font:600 11.5px 'JetBrains Mono',monospace;color:var(--muted)}
+  .fpop-footer{padding:8px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
   tbody td{padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
   tbody tr:nth-child(even){background:#FAFBFA}
   tbody tr:hover{background:var(--teal-soft)}
@@ -172,7 +203,7 @@ const MAX_FILTER_OPTIONS = 30;
 const MAX_BREAKDOWNS = 3;
 
 let tokenClient = null, accessToken = null;
-let columns = [], rows = [], filters = {}, searchQ = '', sortCol = -1, sortDir = 1;
+let columns = [], rows = [], filters = {}, colFilters = {}, searchQ = '', sortCol = -1, sortDir = 1;
 
 const $ = id => document.getElementById(id);
 $('footId').textContent = SHEET_ID.slice(0,10) + '…';
@@ -350,7 +381,10 @@ function getFiltered(){
   let out = rows;
   const q = searchQ.toLowerCase().trim();
   if(q) out = out.filter(r => r.some(v => String(v).toLowerCase().includes(q)));
-  for(const [ci,val] of Object.entries(filters)) out = out.filter(r => String(r[ci])===val);
+  // ustun popup filterlari
+  for(const [ci, vals] of Object.entries(colFilters)){
+    if(vals && vals.size > 0) out = out.filter(r => vals.has(String(r[ci]).trim()));
+  }
   if(sortCol>=0){
     const t = columns[sortCol].type;
     out = [...out].sort((a,b)=>{
@@ -395,17 +429,17 @@ function render(){ const d=getFiltered(); renderFacts(d); renderBreakdowns(d); r
 function renderFacts(data){
   const facts=[];
 
-  // 1) Jami — faqat jinsi yozilgan qatorlarni sanash
-const jinsCol=findCol(['jinsi','jins','gender']);
-const holatCol=findCol(['holati','holat','status']);
-const jinsliData = data.filter(r=>{
-  const jinsi = jinsCol>=0 ? String(r[jinsCol]).trim() : 'bor';
-  const holat = holatCol>=0 ? String(r[holatCol]).trim().toLowerCase() : '';
-  const bekor = /bekor/i.test(holat);
-  return jinsi!=='' && !bekor;
-});
-facts.push({lbl:'Jami shartnomalar',val:fmt(jinsliData.length),live:true,
-  sub:`bekor qilganlar ayirilgan`});
+  // 1) Jami — jinsi yozilgan VA bekor qilmagan qatorlarni sanash
+  const jinsCol=findCol(['jinsi','jins','gender']);
+  const holatCol=findCol(['holati','holat','status']);
+  const jinsliData = data.filter(r=>{
+    const jinsi = jinsCol>=0 ? String(r[jinsCol]).trim() : 'bor';
+    const holat = holatCol>=0 ? String(r[holatCol]).trim().toLowerCase() : '';
+    const bekor = /bekor/i.test(holat);
+    return jinsi!=='' && !bekor;
+  });
+  facts.push({lbl:'Jami shartnomalar',val:fmt(jinsliData.length),live:true,
+    sub:`bekor qilganlar ayirilgan`});
 
   // 2) Filtr natijasi yoki ko'rsatilmoqda
   const isF=searchQ.trim()||Object.keys(filters).length;
@@ -455,7 +489,17 @@ function renderBreakdowns(data){
 function priority(i){const l=columns[i].label.toLowerCase();if(/holat|status/.test(l))return 5;if(/sinf|class/.test(l))return 4;if(/til/.test(l))return 3;if(/jins/.test(l))return 2;if(/eshit|manba|source/.test(l))return 1;return 0;}
 
 function renderTable(data){
-  $('thead').innerHTML='<tr><th>#</th>'+columns.map((c,i)=>`<th onclick="setSort(${i})">${esc(c.label)}${sortCol===i?`<span class="arrow">${sortDir>0?'▲':'▼'}</span>`:''}</th>`).join('')+'</tr>';
+  $('thead').innerHTML='<tr><th><div class="th-inner">#</div></th>'+columns.map((c,i)=>{
+    const hasFilter = colFilters[i] && colFilters[i].size > 0;
+    const isSorted = sortCol===i;
+    return `<th class="${hasFilter?'filtered':''}" data-col="${i}">
+      <div class="th-inner">
+        <span onclick="setSort(${i})">${esc(c.label)}${isSorted?`<span class="arrow">${sortDir>0?' ▲':' ▼'}</span>`:''}</span>
+        <span class="ficon" onclick="openColFilter(event,${i})" title="Filter">▾</span>
+      </div>
+    </th>`;
+  }).join('')+'</tr>';
+
   const LIMIT=1000;
   $('tbody').innerHTML=data.slice(0,LIMIT).map((r,idx)=>`<tr><td class="rownum">${idx+1}</td>`+r.map((v,i)=>{
     const col=columns[i]; const s=String(v);
@@ -466,18 +510,140 @@ function renderTable(data){
   $('tableCount').textContent=data.length>LIMIT?`${fmt(data.length)} tadan dastlabki ${LIMIT} tasi`:`${fmt(data.length)} ta yozuv`;
 }
 
+/* ===== Ustun filter popup ===== */
+let activePop = null;
+
+function openColFilter(e, colIdx){
+  e.stopPropagation();
+  closeColFilter();
+
+  const allVals = [...new Set(rows.map(r=>String(r[colIdx]).trim()))].sort((a,b)=>a.localeCompare(b,'uz'));
+  const selected = colFilters[colIdx] || new Set(allVals); // bo'sh = hammasi tanlangan
+  const counts = {};
+  rows.forEach(r=>{ const v=String(r[colIdx]).trim(); counts[v]=(counts[v]||0)+1; });
+
+  const pop = document.createElement('div');
+  pop.className = 'fpop';
+  pop.id = 'colFilterPop';
+
+  pop.innerHTML = `
+    <div class="fpop-head">
+      <div class="fpop-search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="fpopSearch" type="text" placeholder="Qidirish..." autocomplete="off">
+      </div>
+      <div class="fpop-actions">
+        <button onclick="fpopSelectAll(${colIdx})">Barchasi</button>
+        <button onclick="fpopClearAll(${colIdx})">Tozalash</button>
+        <button class="apply" onclick="applyColFilter(${colIdx})">Qo'llash</button>
+      </div>
+    </div>
+    <div class="fpop-list" id="fpopList"></div>
+    <div class="fpop-footer" id="fpopFooter"></div>
+  `;
+
+  document.body.appendChild(pop);
+  activePop = { el: pop, colIdx, allVals, selected: new Set(selected), counts };
+
+  fpopRenderList('');
+  positionPop(pop, e.target);
+
+  const si = pop.querySelector('#fpopSearch');
+  si.focus();
+  si.addEventListener('input', ev => fpopRenderList(ev.target.value));
+  document.addEventListener('mousedown', outsideClick, {once:false});
+}
+
+function fpopRenderList(q){
+  if(!activePop) return;
+  const {allVals, selected, counts} = activePop;
+  const filtered = q ? allVals.filter(v=>v.toLowerCase().includes(q.toLowerCase())) : allVals;
+  const list = document.getElementById('fpopList');
+  const footer = document.getElementById('fpopFooter');
+  if(!list) return;
+  list.innerHTML = filtered.map(v=>`
+    <label class="fpop-item">
+      <input type="checkbox" value="${esc(v)}" ${selected.has(v)||selected.size===0?'checked':''} onchange="fpopToggle('${esc(v).replace(/'/g,"\\'")}')">
+      <span>${esc(v)||'<i style="color:var(--muted)">(bo\'sh)</i>'}</span>
+      <span class="cnt">${counts[v]||0}</span>
+    </label>`).join('');
+  footer.textContent = `${selected.size === allVals.length || selected.size===0 ? 'Barchasi' : selected.size + ' ta'} tanlangan · Jami ${allVals.length} ta`;
+}
+
+function fpopToggle(val){
+  if(!activePop) return;
+  const {allVals, selected} = activePop;
+  // Agar hamma tanlangan holatdan kelayotgan bo'lsa — faqat shu qolsin
+  if(selected.size === allVals.length){ activePop.selected = new Set([val]); }
+  else if(selected.has(val)){ selected.delete(val); }
+  else { selected.add(val); }
+  fpopRenderList(document.getElementById('fpopSearch')?.value||'');
+}
+
+function fpopSelectAll(colIdx){
+  if(!activePop) return;
+  activePop.selected = new Set(activePop.allVals);
+  fpopRenderList(document.getElementById('fpopSearch')?.value||'');
+}
+function fpopClearAll(colIdx){
+  if(!activePop) return;
+  activePop.selected = new Set();
+  fpopRenderList(document.getElementById('fpopSearch')?.value||'');
+}
+
+function applyColFilter(colIdx){
+  if(!activePop) return;
+  const {allVals, selected} = activePop;
+  if(selected.size === 0 || selected.size === allVals.length){
+    delete colFilters[colIdx]; // filter yo'q — hammasi ko'rsatiladi
+  } else {
+    colFilters[colIdx] = new Set(selected);
+  }
+  closeColFilter();
+  render();
+}
+
+function closeColFilter(){
+  const pop = document.getElementById('colFilterPop');
+  if(pop) pop.remove();
+  activePop = null;
+  document.removeEventListener('mousedown', outsideClick);
+}
+
+function outsideClick(e){
+  const pop = document.getElementById('colFilterPop');
+  if(pop && !pop.contains(e.target)) { closeColFilter(); }
+}
+
+function positionPop(pop, anchor){
+  const rect = anchor.getBoundingClientRect();
+  const pw = 260;
+  let left = rect.left;
+  let top = rect.bottom + 4;
+  if(left + pw > window.innerWidth - 10) left = window.innerWidth - pw - 10;
+  if(left < 4) left = 4;
+  if(top + 380 > window.innerHeight) top = rect.top - 380 - 4;
+  pop.style.left = left+'px';
+  pop.style.top = top+'px';
+  pop.style.width = pw+'px';
+}
+
 function renderChips(){
   const chips=[];
   if(searchQ.trim())chips.push(`<span class="chip" onclick="clearSearch()">Qidiruv: <b>${esc(searchQ)}</b> ✕</span>`);
   for(const [ci,val] of Object.entries(filters))chips.push(`<span class="chip" onclick="removeFilter(${ci})">${esc(columns[ci].label)}: <b>${esc(val)}</b> ✕</span>`);
+  for(const [ci,vals] of Object.entries(colFilters)){
+    if(vals&&vals.size>0) chips.push(`<span class="chip" onclick="removeColFilter(${ci})">${esc(columns[ci].label)}: <b>${vals.size} ta tanlangan</b> ✕</span>`);
+  }
   $('activeChips').innerHTML=chips.join('');
 }
 
 function setSort(i){ if(sortCol===i)sortDir*=-1; else {sortCol=i;sortDir=1;} render(); }
 function removeFilter(ci){ delete filters[ci]; document.querySelectorAll('#filterSelects select').forEach(s=>{if(+s.dataset.col===+ci)s.value='';}); render(); }
+function removeColFilter(ci){ delete colFilters[ci]; render(); }
 function clearSearch(){ searchQ=''; $('searchInput').value=''; render(); }
 $('searchInput').addEventListener('input',e=>{searchQ=e.target.value;render();});
-$('btnClear').onclick=()=>{searchQ='';filters={};sortCol=-1;$('searchInput').value='';document.querySelectorAll('#filterSelects select').forEach(s=>s.value='');render();};
+$('btnClear').onclick=()=>{searchQ='';filters={};colFilters={};sortCol=-1;$('searchInput').value='';document.querySelectorAll('#filterSelects select').forEach(s=>s.value='');render();};
 $('btnRefresh').onclick=loadData;
 $('btnCsv').onclick=()=>{
   const data=getFiltered();const cell=v=>`"${String(v).replace(/"/g,'""')}"`;
