@@ -163,8 +163,8 @@
    ============================================================ */
 const CLIENT_ID = '979016762856-ajsbdlofld9lfpaojs60qrmdqdfrldrs.apps.googleusercontent.com';
 const SHEET_ID  = '1hXLps9I00RfxNwrEX2wrhO2becSiO4aCWx404gZVKKY';
-const SHEET_GID = '';
-const SHEET_NAME = 'Maktab';
+const SHEET_GID = '';  // Bo'sh — nom bo'yicha topiladi
+const SHEET_NAME = 'Maktab'; // Shu varaqdan ma'lumot olinadi
 /* ============================================================ */
 
 const SCOPE = 'openid email https://www.googleapis.com/auth/spreadsheets.readonly';
@@ -244,11 +244,14 @@ async function loadData(){
     if(metaRes.status === 401){ return reauth(); }
     if(!metaRes.ok){ const body = await metaRes.text(); throw new Error('META ' + metaRes.status + ' :: ' + body); }
     const meta = await metaRes.json();
+    // Avval gid bo'yicha izlaymiz, topilmasa "1Shartnoma" yoki "Shartnoma" nomli varaqni,
+    // oxirida birinchi varaqni olamiz
     const sheet =
-  meta.sheets.find(s => String(s.properties.sheetId) === String(SHEET_GID) && SHEET_GID) ||
-  meta.sheets.find(s => s.properties.title === SHEET_NAME) ||
-  meta.sheets[0];
+      meta.sheets.find(s => String(s.properties.sheetId) === String(SHEET_GID) && SHEET_GID) ||
+      meta.sheets.find(s => s.properties.title === SHEET_NAME) ||
+      meta.sheets[0];
     const title = sheet.properties.title;
+    console.log('Varaq:', title, '| sheetId:', sheet.properties.sheetId, '| Jami varaqlar:', meta.sheets.map(s=>s.properties.title).join(', '));
 
     // 2) qiymatlarni olish
     const valRes = await api(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(title)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
@@ -360,14 +363,22 @@ function getFiltered(){
 }
 
 /* ---------- UI ---------- */
+// Bu ustun nomlari har doim filter sifatida ko'rsatiladi (noyob qiymat soni qancha bo'lmasin)
+const PRIORITY_FILTERS = ['holat','sinf','guruh','jinsi','jins','ta\'lim','til','yangi','mavjud','kelib','maktabga','o\'quv yil','oylik'];
+
 function buildUI(){
   hideAllStates();
   ['facts','controls','breakdowns','tableCard'].forEach(show);
   const fs = $('filterSelects'); fs.innerHTML='';
   columns.forEach((col,i)=>{
-    if(col.type==='number') return;
+    if(col.type==='number' || col.type==='date') return;
+    const lbl = col.label.toLowerCase();
+    const isPriority = PRIORITY_FILTERS.some(k=>lbl.includes(k));
     const uniq=[...new Set(rows.map(r=>String(r[i]).trim()).filter(Boolean))];
-    if(uniq.length<2 || uniq.length>MAX_FILTER_OPTIONS) return;
+    // Oddiy ustunlar: 2-30 ta noyob qiymat bo'lsa dropdown
+    // Muhim ustunlar: 2-100 ta bo'lsa ham dropdown
+    const maxOpts = isPriority ? 100 : MAX_FILTER_OPTIONS;
+    if(uniq.length<2 || uniq.length>maxOpts) return;
     const sel=document.createElement('select');
     sel.innerHTML=`<option value="">${esc(col.label)}: barchasi</option>`+
       uniq.sort((a,b)=>a.localeCompare(b,'uz')).map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
@@ -383,14 +394,40 @@ function render(){ const d=getFiltered(); renderFacts(d); renderBreakdowns(d); r
 
 function renderFacts(data){
   const facts=[];
-  facts.push({lbl:'Jami shartnomalar',val:fmt(rows.length),live:true});
-  const isF = searchQ.trim()||Object.keys(filters).length;
-  facts.push({lbl:isF?'Filtr natijasi':'Ko\u02bcrsatilmoqda',val:fmt(data.length),accent:true,sub:isF?`jami ${fmt(rows.length)} tadan`:'barcha yozuvlar'});
+
+  // 1) Jami — faqat jinsi yozilgan qatorlarni sanash
+  const jinsCol=findCol(['jinsi','jins','gender']);
+  const jinsliData = jinsCol>=0 ? data.filter(r=>String(r[jinsCol]).trim()!=='') : data;
+  facts.push({lbl:'Jami shartnomalar',val:fmt(jinsliData.length),live:true,
+    sub: jinsCol>=0 && jinsliData.length!==data.length ? `(${data.length} tadan jinsi yozilgan)` : ''});
+
+  // 2) Filtr natijasi yoki ko'rsatilmoqda
+  const isF=searchQ.trim()||Object.keys(filters).length;
+  facts.push({lbl:isF?'Filtr natijasi':'Ko\u02bcrsatilmoqda',val:fmt(data.length),accent:true,
+    sub:isF?`jami ${fmt(rows.length)} tadan`:'barcha yozuvlar'});
+
+  // 3) Erkak / Ayol
+  if(jinsCol>=0){
+    const erkak=data.filter(r=>/erkak/i.test(String(r[jinsCol]))).length;
+    const ayol=data.filter(r=>/ayol/i.test(String(r[jinsCol]))).length;
+    if(erkak+ayol>0) facts.push({lbl:'Erkak / Ayol',val:`${fmt(erkak)} / ${fmt(ayol)}`,sub:`jinsi ko'rsatilgan: ${fmt(erkak+ayol)}`});
+  }
+
+  // 4) Yangi / Mavjud o'quvchi
+  const yangiCol=findCol(['yangi yoki','yangi','mavjud','new']);
+  if(yangiCol>=0){
+    const c={};data.forEach(r=>{const v=String(r[yangiCol]).trim();if(v)c[v]=(c[v]||0)+1;});
+    const entries=Object.entries(c).sort((a,b)=>b[1]-a[1]);
+    if(entries.length>0) facts.push({lbl:'Yangi / Mavjud',val:entries.map(([k,v])=>`${k}: ${fmt(v)}`).join(' · '),sub:''});
+  }
+
+  // 5) Jami summa
   const sumCol=findCol(['shartnoma sum','summa','summ']);
-  if(sumCol>=0){const total=data.reduce((s,r)=>s+toNum(r[sumCol]),0);if(total>0)facts.push({lbl:'Jami shartnoma summasi',val:fmtSum(total),sub:data.length?`o'rtacha ${fmtSum(total/data.length)}`:''});}
-  const statCol=findCol(['holat','status']);
-  if(statCol>=0&&facts.length<5){const c={};data.forEach(r=>{const v=String(r[statCol]).trim();if(v)c[v]=(c[v]||0)+1;});const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];if(top)facts.push({lbl:'Eng ko\u02bcp holat',val:fmt(top[1]),sub:top[0]});}
-  columns.forEach((c,i)=>{if(c.type!=='number'||i===sumCol||facts.length>=5)return;const s=data.reduce((a,r)=>a+toNum(r[i]),0);if(s===0)return;facts.push({lbl:c.label+' (jami)',val:fmt(s)});});
+  if(sumCol>=0&&facts.length<6){
+    const total=data.reduce((s,r)=>s+toNum(r[sumCol]),0);
+    if(total>0)facts.push({lbl:'Jami shartnoma summasi',val:fmtSum(total),sub:data.length?`o'rtacha ${fmtSum(total/data.length)}`:''});
+  }
+
   $('facts').innerHTML=facts.map(f=>`<div class="fact ${f.live?'live':''}"><div class="lbl">${esc(f.lbl)}</div><div class="val ${f.accent?'accent':''}">${f.val}</div>${f.sub?`<div class="sub">${esc(f.sub)}</div>`:''}</div>`).join('');
 }
 
